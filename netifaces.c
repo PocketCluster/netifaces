@@ -20,9 +20,9 @@
  * SOFTWARE.
  */
 
-#ifndef WIN32
+#include "netifaces.h"
 
-#    include <errno.h>
+#ifndef WIN32
 
 #ifdef __linux__
 
@@ -202,6 +202,7 @@
 
 #  endif // __APPLE__
 
+#  include <stddef.h>
 #  include <stdio.h>
 #  include <string.h>
 #  include <stdlib.h>
@@ -1138,10 +1139,76 @@ interfaces (PyObject *self)
 
 /* -- gateways() ------------------------------------------------------------ */
 
-static PyObject *
-gateways (PyObject *self)
+static bool
+add_to_gatways(Gateway** results, Gateway* gateway) {
+    Gateway* node = *results;
+    if (gateway == NULL) {
+        return false;
+    }
+    if (*results == NULL) {
+        *results = gateway;
+        return true;
+    }
+    while(node->next != NULL) {
+        node = node->next;
+    }
+    node->next = gateway;
+    return true;
+}
+    
+void
+release_gateways(Gateway** results) {
+    Gateway *head = *results, *tail = NULL;
+    if (*results == NULL) {
+        return;
+    }
+    // traseverse linked list
+    while(head != NULL) {
+        tail = head;
+        head = head->next;
+        
+        if (tail->ifname != NULL) {
+            free(tail->ifname);
+        }
+        if (tail->addr != NULL) {
+            free(tail->addr);
+        }
+        tail->next = NULL;
+        free(tail);
+        tail = NULL;
+    }
+    *results = NULL;
+}
+
+static Gateway*
+find_default_gateway_by_family(Gateway** results, unsigned char family) {
+    Gateway *node = *results;
+    if (*results == NULL) {
+        return NULL;
+    }
+    while(node != NULL) {
+        if (node->family == family && node->is_default) {
+            return node;
+        }
+        node = node->next;
+    }
+    return NULL;
+}
+    
+Gateway*
+find_default_ip4_gw(Gateway** results) {
+    return find_default_gateway_by_family(results, AF_INET);
+}
+
+Gateway*
+find_default_ip6_gw(Gateway** results) {
+    return find_default_gateway_by_family(results, AF_INET6);
+}
+
+errno_t
+find_system_gateways(Gateway** results)
 {
-  PyObject *result, *defaults;
+  //PyObject *result, *defaults;
 
 #if defined(HAVE_PF_NETLINK)
   /* .. Linux (PF_NETLINK socket) ........................................... */
@@ -1421,30 +1488,18 @@ gateways (PyObject *self)
   char ifnamebuf[IF_NAMESIZE];
   char *ifname;
 
-  result = PyDict_New();
-  defaults = PyDict_New();
-  PyDict_SetItemString (result, "default", defaults);
-  Py_DECREF (defaults);
-
-  /* This prevents a crash on PyPy */
-  defaults = PyDict_GetItemString (result, "default");
-
   /* Remembering that the routing table may change while we're reading it,
      we need to do this in a loop until we succeed. */
   do {
     if (sysctl (mib, 6, 0, &len, 0, 0) < 0) {
-      PyErr_SetFromErrno (PyExc_OSError);
       free (buffer);
-      Py_DECREF (result);
-      return NULL;
+      return ENETUNREACH;
     }
 
     ptr = realloc(buffer, len);
     if (!ptr) {
-      PyErr_NoMemory();
       free (buffer);
-      Py_DECREF (result);
-      return NULL;
+      return ENOMEM;
     }
 
     buffer = ptr;
@@ -1453,10 +1508,8 @@ gateways (PyObject *self)
   } while (ret != 0 || errno == ENOMEM || errno == EINTR);
 
   if (ret < 0) {
-    PyErr_SetFromErrno (PyExc_OSError);
     free (buffer);
-    Py_DECREF (result);
-    return NULL;
+    return ENETUNREACH;
   }
 
   ptr = buffer;
@@ -1467,7 +1520,6 @@ gateways (PyObject *self)
     char *msgend = (char *)msg + msg->rtm_msglen;
     int addrs = msg->rtm_addrs;
     int addr = RTA_DST;
-    PyObject *pyifname;
 
     if (msgend > end)
       break;
@@ -1478,8 +1530,6 @@ gateways (PyObject *self)
       ptr = msgend;
       continue;
     }
-
-    pyifname = PyString_FromString (ifname);
 
     ptr = (char *)(msg + 1);
     while (ptr + sizeof (struct sockaddr) <= msgend && addrs) {
@@ -1517,41 +1567,32 @@ gateways (PyObject *self)
 
       if (addr == RTA_GATEWAY) {
         char buffer[256];
-        PyObject *tuple = NULL;
-        PyObject *deftuple = NULL;
+        Gateway* gateway = NULL;
 
         if (string_from_sockaddr (sa, buffer, sizeof(buffer)) == 0) {
-          PyObject *pyaddr = PyString_FromString (buffer);
 #ifdef RTF_IFSCOPE
-          PyObject *isdefault = PyBool_FromLong (!(msg->rtm_flags & RTF_IFSCOPE));
+          bool is_default = !(msg->rtm_flags & RTF_IFSCOPE);
 #else
-          Py_INCREF(Py_True);
-          PyObject *isdefault = Py_True;
+          bool is_default = true;
 #endif
-          tuple = PyTuple_Pack (3, pyaddr, pyifname, isdefault);
-
-          if (PyObject_IsTrue (isdefault))
-            deftuple = PyTuple_Pack (2, pyaddr, pyifname);
-
-          Py_DECREF (pyaddr);
-          Py_DECREF (isdefault);
+          gateway = (Gateway *) calloc(1, sizeof (Gateway));
+          
+          gateway->is_default = is_default;
+          gateway->family = sa->sa_family;
+            
+          size_t addr_len = strlen(buffer);
+          char* addr = (char *) malloc (addr_len * sizeof(char));
+          memcpy(addr, buffer, addr_len);
+          gateway->addr = addr;
+          
+          size_t ifname_len = strlen(ifname);
+          char* gw_ifname = (char *) malloc (ifname_len * sizeof(char));
+          memcpy(gw_ifname, ifname, ifname_len);
+          gateway->ifname = gw_ifname;
         }
-
-        if (tuple && !add_to_family (result, sa->sa_family, tuple)) {
-          Py_DECREF (deftuple);
-          Py_DECREF (result);
-          Py_DECREF (pyifname);
-          free (buffer);
-          return NULL;
-        }
-
-        if (deftuple) {
-          PyObject *pyfamily = PyInt_FromLong (sa->sa_family);
-
-          PyDict_SetItem (defaults, pyfamily, deftuple);
-
-          Py_DECREF (pyfamily);
-          Py_DECREF (deftuple);
+          
+        if (gateway != NULL) {
+          add_to_gatways(results, gateway);
         }
       }
 
@@ -1559,7 +1600,6 @@ gateways (PyObject *self)
       ptr += len;
     }
 
-    Py_DECREF (pyifname);
     ptr = msgend;
   }
 
@@ -1968,9 +2008,9 @@ gateways (PyObject *self)
 #else
   /* If we don't know how to implement this on your platform, we raise an
      exception. */
-  PyErr_SetString (PyExc_OSError,
-                   "Unable to obtain gateway information on your platform.");
+#  error Unable to obtain gateway information on your platform
 #endif
 
-  return result;
+  return 0;
 }
+

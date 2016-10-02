@@ -24,6 +24,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0430934E1DA12588008DAC9E /* netifaces.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = netifaces.h; path = ../../netifaces.h; sourceTree = "<group>"; };
 		049F22951DA01D4200CBE88B /* netifaces */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = netifaces; sourceTree = BUILT_PRODUCTS_DIR; };
 		049F22981DA01D4200CBE88B /* main.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = main.c; sourceTree = "<group>"; };
 		049F22A51DA0256600CBE88B /* netifaces.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = netifaces.c; path = ../../netifaces.c; sourceTree = "<group>"; };
@@ -60,6 +61,7 @@
 			isa = PBXGroup;
 			children = (
 				049F22A51DA0256600CBE88B /* netifaces.c */,
+				0430934E1DA12588008DAC9E /* netifaces.h */,
 				049F22981DA01D4200CBE88B /* main.c */,
 			);
 			path = netifaces;
