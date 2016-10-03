@@ -2,13 +2,13 @@ package netifaces
 
 import "testing"
 
-func TestFirstOverview(t *testing.T) {
-    gw, _ := FindAllSystemGateways()
-    defer gw.Relese()
-}
-
 func TestDefaultIP4Gateway(t *testing.T) {
-    gw, _ := FindAllSystemGateways()
-    addr, _ := gw.FindDefaultIP4Gateway()
-    t.Error("Default gateway " + addr)
+    gw, err := FindAllSystemGateways(); if err != nil {
+        t.Error(err.Error())
+    }
+    _, _, err = gw.DefaultIP4Gateway(); if err != nil {
+        t.Errorf(err.Error())
+    }
+
+    gw.Release()
 }

@@ -5,7 +5,6 @@ package netifaces
 import "C"
 import (
     "syscall"
-    //"unsafe"
     "fmt"
 )
 
@@ -13,29 +12,27 @@ type Gateway struct {
     gateway *C.Gateway
 }
 
-func FindAllSystemGateways() (Gateway, error) {
-    var gw Gateway
+func FindAllSystemGateways() (*Gateway, error) {
+    var gw *Gateway = &Gateway{}
     syserr := C.find_system_gateways(&gw.gateway)
-    fmt.Printf(syscall.Errno(syserr).Error())
+    if syserr != 0 {
+        return nil, fmt.Errorf("[ERR] Cannot find all system gateways %s", syscall.Errno(syserr).Error())
+    }
     return gw, nil
 }
 
-func (g *Gateway) Relese() {
+func (g *Gateway) Release() {
     C.release_gateways(&g.gateway)
 }
 
-func (g *Gateway) DefaultIP4GatewayAddress() (string, error) {
+func (g *Gateway) DefaultIP4Gateway() (address string, ifname string, err error) {
     var gw *C.Gateway = C.find_default_ip4_gw(&g.gateway)
     if gw == nil {
-        return "", fmt.Errorf("[ERR] Cannot find default gateway for IP4")
+        err = fmt.Errorf("[ERR] Cannot find default gateway for IP4")
+        return
     }
-    return C.GoString(gw.addr), nil
-}
-
-func (g *Gateway) DefaultIP4GatewayIface() (string, error) {
-    var gw *C.Gateway = C.find_default_ip4_gw(&g.gateway)
-    if gw == nil {
-        return "", fmt.Errorf("[ERR] Cannot find default gateway for IP4")
-    }
-    return C.GoString(gw.iface), nil
+    address = C.GoString(gw.addr)
+    ifname = C.GoString(gw.ifname)
+    err = nil
+    return
 }
