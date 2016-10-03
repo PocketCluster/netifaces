@@ -12,7 +12,8 @@ type Gateway struct {
     gateway *C.Gateway
 }
 
-func FindAllSystemGateways() (*Gateway, error) {
+// Find all gateways in system
+func FindSystemGateways() (*Gateway, error) {
     var gw *Gateway = &Gateway{}
     syserr := C.find_system_gateways(&gw.gateway)
     if syserr != 0 {
@@ -21,10 +22,12 @@ func FindAllSystemGateways() (*Gateway, error) {
     return gw, nil
 }
 
+// Release all search results
 func (g *Gateway) Release() {
     C.release_gateways(&g.gateway)
 }
 
+// Find the first ip4 default gateway
 func (g *Gateway) DefaultIP4Gateway() (address string, ifname string, err error) {
     var gw *C.Gateway = C.find_default_ip4_gw(&g.gateway)
     if gw == nil {
