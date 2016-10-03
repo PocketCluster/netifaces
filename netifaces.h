@@ -11,7 +11,6 @@
 
 #ifndef WIN32
 
-#include <errno.h>
 #include <stdbool.h>
 
 typedef struct Gateway {
@@ -22,17 +21,17 @@ typedef struct Gateway {
     char*              addr;
 } Gateway;
 
-errno_t
-find_system_gateways(Gateway** results);
+// find all system gateways & return linked list results
+int find_system_gateways(Gateway** results);
 
-void
-release_gateways(Gateway** results);
+// release the results
+void release_gateways(Gateway** results);
 
-Gateway*
-find_default_ip4_gw(Gateway** results);
+// find the first ip4 default gateway in the results
+Gateway* find_default_ip4_gw(Gateway** results);
 
-Gateway*
-find_default_ip6_gw(Gateway** results);
+// find the first ip6 default gateway in the results
+Gateway* find_default_ip6_gw(Gateway** results);
 
 #endif
 

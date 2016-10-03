@@ -26,6 +26,8 @@
 
 #ifdef __linux__
 
+#  include <unistd.h>
+
 #  ifndef HAVE_GETIFADDRS
 #    define HAVE_GETIFADDRS 1
 #  endif
@@ -206,6 +208,7 @@
 #  include <stdio.h>
 #  include <string.h>
 #  include <stdlib.h>
+#  include <errno.h>
 
 #  include <sys/types.h>
 #  include <sys/socket.h>
@@ -1205,11 +1208,9 @@ find_default_ip6_gw(Gateway** results) {
     return find_default_gateway_by_family(results, AF_INET6);
 }
 
-errno_t
+int
 find_system_gateways(Gateway** results)
 {
-  //PyObject *result, *defaults;
-
 #if defined(HAVE_PF_NETLINK)
   /* .. Linux (PF_NETLINK socket) ........................................... */
 
@@ -1236,29 +1237,17 @@ find_system_gateways(Gateway** results)
 
   memset(def_priorities, 0xff, sizeof(def_priorities));
 
-  result = PyDict_New();
-  defaults = PyDict_New();
-  PyDict_SetItemString (result, "default", defaults);
-  Py_DECREF (defaults);
-
-  /* This prevents a crash on PyPy */
-  defaults = PyDict_GetItemString (result, "default");
-
   msgbuf = (struct routing_msg *)malloc (bufsize);
-
+    
   if (!msgbuf) {
-    PyErr_NoMemory ();
-    Py_DECREF (result);
-    return NULL;
+    return ENOMEM;
   }
 
   s = socket (PF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
 
   if (s < 0) {
-    PyErr_SetFromErrno (PyExc_OSError);
-    Py_DECREF (result);
     free (msgbuf);
-    return NULL;
+    return ENETUNREACH;
   }
 
   sanl.nl_family = AF_NETLINK;
@@ -1266,20 +1255,17 @@ find_system_gateways(Gateway** results)
   sanl.nl_pid = 0;
 
   if (bind (s, (struct sockaddr *)&sanl, sizeof (sanl)) < 0) {
-    PyErr_SetFromErrno (PyExc_OSError);
-    Py_DECREF (result);
     free (msgbuf);
     close (s);
-    return NULL;
+    return ENONET;
   }
 
   sanl_len = sizeof (sanl);
+    
   if (getsockname (s, (struct sockaddr *)&sanl, &sanl_len) < 0) {
-    PyErr_SetFromErrno  (PyExc_OSError);
-    Py_DECREF (result);
     free (msgbuf);
     close (s);
-    return NULL;
+    return ENETUNREACH;
   }
 
   do {
@@ -1297,11 +1283,9 @@ find_system_gateways(Gateway** results)
 
     if (sendto (s, pmsg, pmsg->hdr.nlmsg_len, 0,
                 (struct sockaddr *)&sanl_kernel, sizeof(sanl_kernel)) < 0) {
-      PyErr_SetFromErrno  (PyExc_OSError);
-      Py_DECREF (result);
       free (msgbuf);
       close (s);
-      return NULL;
+      return ENETUNREACH;
     }
 
     do {
@@ -1321,19 +1305,16 @@ find_system_gateways(Gateway** results)
       ret = recvmsg (s, &msghdr, 0);
 
       if (msghdr.msg_flags & MSG_TRUNC) {
-        PyErr_SetString (PyExc_OSError, "netlink message truncated");
-        Py_DECREF (result);
+        //"netlink message truncated"
         free (msgbuf);
         close (s);
-        return NULL;
+        return ENETUNREACH;
       }
 
       if (ret < 0) {
-        PyErr_SetFromErrno (PyExc_OSError);
-        Py_DECREF (result);
         free (msgbuf);
         close (s);
-        return NULL;
+        return ENETUNREACH;
       }
 
       nllen = ret;
@@ -1370,11 +1351,9 @@ find_system_gateways(Gateway** results)
         if (pmsg->hdr.nlmsg_type == NLMSG_ERROR) {
           struct nlmsgerr *perr = (struct nlmsgerr *)&pmsg->rt;
           errno = -perr->error;
-          PyErr_SetFromErrno (PyExc_OSError);
-          Py_DECREF (result);
           free (msgbuf);
           close (s);
-          return NULL;
+          return errno;
         }
 
         attr = attrs = RTM_RTA(&pmsg->rt);
@@ -1407,11 +1386,9 @@ find_system_gateways(Gateway** results)
           char ifnamebuf[IF_NAMESIZE];
           char *ifname;
           const char *addr;
-          PyObject *pyifname;
-          PyObject *pyaddr;
-          PyObject *isdefault;
-          PyObject *tuple = NULL, *deftuple = NULL;
-
+          Gateway* gateway = NULL;
+          bool is_default = false;
+            
           ifname = if_indextoname (ifndx, ifnamebuf);
 
           if (!ifname)
@@ -1426,8 +1403,8 @@ find_system_gateways(Gateway** results)
              this should correspond with the way most people set up alternate
              routing tables on Linux. */
 
-          isdefault = pmsg->rt.rtm_table == RT_TABLE_MAIN ? Py_True : Py_False;
-
+          is_default = (bool)(pmsg->rt.rtm_table == RT_TABLE_MAIN);
+            
           /* Try to pick the active default route based on priority (which
              is displayed in the UI as "metric", confusingly) */
           if (pmsg->rt.rtm_family < RTNL_FAMILY_MAX) {
@@ -1436,37 +1413,26 @@ find_system_gateways(Gateway** results)
             else {
               if (priority == -1
                   || priority > def_priorities[pmsg->rt.rtm_family])
-                isdefault = Py_False;
+                is_default = false;
             }
           }
 
-          pyifname = PyString_FromString (ifname);
-          pyaddr = PyString_FromString (buffer);
+          gateway = (Gateway *) calloc(1, sizeof (Gateway));
+          
+          gateway->is_default = is_default;
+          gateway->family = pmsg->rt.rtm_family;
+          
+          size_t gw_addr_len = strlen(buffer);
+          char* gw_addr = (char *) malloc (gw_addr_len * sizeof(char));
+          memcpy(gw_addr, buffer, gw_addr_len);
+          gateway->addr = gw_addr;
+          
+          size_t gw_ifname_len = strlen(ifname);
+          char* gw_ifname = (char *) malloc (gw_ifname_len * sizeof(char));
+          memcpy(gw_ifname, ifname, gw_ifname_len);
+          gateway->ifname = gw_ifname;
 
-          tuple = PyTuple_Pack (3, pyaddr, pyifname, isdefault);
-
-          if (PyObject_IsTrue (isdefault))
-            deftuple = PyTuple_Pack (2, pyaddr, pyifname);
-
-          Py_DECREF (pyaddr);
-          Py_DECREF (pyifname);
-
-          if (tuple && !add_to_family (result, pmsg->rt.rtm_family, tuple)) {
-            Py_XDECREF (deftuple);
-            Py_DECREF (result);
-            free (msgbuf);
-            close (s);
-            return NULL;
-          }
-
-          if (deftuple) {
-            PyObject *pyfamily = PyInt_FromLong (pmsg->rt.rtm_family);
-
-            PyDict_SetItem (defaults, pyfamily, deftuple);
-
-            Py_DECREF (pyfamily);
-            Py_DECREF (deftuple);
-          }
+          add_to_gatways(results, gateway);
         }
 
       next:
@@ -1580,14 +1546,14 @@ find_system_gateways(Gateway** results)
           gateway->is_default = is_default;
           gateway->family = sa->sa_family;
             
-          size_t addr_len = strlen(buffer);
-          char* addr = (char *) malloc (addr_len * sizeof(char));
-          memcpy(addr, buffer, addr_len);
-          gateway->addr = addr;
+          size_t gw_addr_len = strlen(buffer);
+          char* gw_addr = (char *) malloc (gw_addr_len * sizeof(char));
+          memcpy(gw_addr, buffer, gw_addr_len);
+          gateway->addr = gw_addr;
           
-          size_t ifname_len = strlen(ifname);
-          char* gw_ifname = (char *) malloc (ifname_len * sizeof(char));
-          memcpy(gw_ifname, ifname, ifname_len);
+          size_t gw_ifname_len = strlen(ifname);
+          char* gw_ifname = (char *) malloc (gw_ifname_len * sizeof(char));
+          memcpy(gw_ifname, ifname, gw_ifname_len);
           gateway->ifname = gw_ifname;
         }
           

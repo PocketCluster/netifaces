@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
-#include "netifaces.h"
+#include "../../netifaces.h"
 
 #ifdef TEST_NETIFACES_GATEWAY_ALLOCATION
 
