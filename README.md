@@ -29,3 +29,11 @@ Portable network interface information - Golang port of Python [netifaces 0.10.5
 ```sh
 go test ./...
 ```
+
+
+### API
+
+1. Gateway
+  - `func FindAllSystemGateways() (*Gateway, error)`
+  - `func (g *Gateway) Release()`
+  - `func (g *Gateway) DefaultIP4Gateway() (address string, ifname string, err error)`
