@@ -24,9 +24,9 @@
 
 #ifndef WIN32
 
-#ifdef __linux__
-
 #  include <unistd.h>
+
+#ifdef __linux__
 
 #  ifndef HAVE_GETIFADDRS
 #    define HAVE_GETIFADDRS 1
@@ -1595,24 +1595,17 @@ find_system_gateways(Gateway** results)
   char *ifname;
   int skip;
 
-  result = PyDict_New();
-  defaults = PyDict_New();
-  PyDict_SetItemString (result, "default", defaults);
-  Py_DECREF(defaults);
-
   pmsg = (struct rt_msghdr *)malloc (bufsize);
-
+    
   if (!pmsg) {
-    PyErr_NoMemory();
-    return NULL;
+    return ENOMEM;
   }
 
   s = socket (PF_ROUTE, SOCK_RAW, 0);
 
   if (s < 0) {
-    PyErr_SetFromErrno (PyExc_OSError);
     free (pmsg);
-    return NULL;
+    return ENETUNREACH;
   }
 
   msglen = (sizeof (struct rt_msghdr)
@@ -1649,10 +1642,9 @@ find_system_gateways(Gateway** results)
     if (errno == ESRCH)
       skip = 1;
     else {
-      PyErr_SetFromErrno (PyExc_OSError);
       close (s);
       free (pmsg);
-      return NULL;
+      return ENETUNREACH;
     }
   }
 
@@ -1664,8 +1656,7 @@ find_system_gateways(Gateway** results)
     struct sockaddr_in *dst = NULL;
     struct sockaddr_in *gw = NULL;
     struct sockaddr_dl *ifp = NULL;
-    PyObject *tuple = NULL;
-    PyObject *deftuple = NULL;
+    Gateway* gateway = NULL;
 
     do {
       ret = recv (s, pmsg, bufsize, 0);
@@ -1673,10 +1664,9 @@ find_system_gateways(Gateway** results)
              || (ret > 0 && (pmsg->rtm_seq != seq || pmsg->rtm_pid != pid)));
 
     if (ret < 0) {
-      PyErr_SetFromErrno (PyExc_OSError);
       close (s);
       free (pmsg);
-      return NULL;
+      return ENETUNREACH;
     }
 
     if (pmsg->rtm_errno != 0) {
@@ -1684,10 +1674,10 @@ find_system_gateways(Gateway** results)
         skip = 1;
       else {
         errno = pmsg->rtm_errno;
-        PyErr_SetFromErrno (PyExc_OSError);
+        int err = pmsg->rtm_errno;
         close (s);
         free (pmsg);
-        return NULL;
+        return err;
       }
     }
 
@@ -1753,39 +1743,30 @@ find_system_gateways(Gateway** results)
 
       if (string_from_sockaddr ((struct sockaddr *)gw,
                                 buffer, sizeof(buffer)) == 0) {
-        PyObject *pyifname = PyString_FromString (ifname);
-        PyObject *pyaddr = PyString_FromString (buffer);
 #ifdef RTF_IFSCOPE
-        PyObject *isdefault = PyBool_FromLong (!(pmsg->rtm_flags & RTF_IFSCOPE));
+        bool is_default = !(pmsg->rtm_flags & RTF_IFSCOPE);
 #else
-        PyObject *isdefault = Py_True;
-	Py_INCREF(isdefault);
+        bool is_default = true;
 #endif
 
-        tuple = PyTuple_Pack (3, pyaddr, pyifname, isdefault);
-
-        if (PyObject_IsTrue (isdefault))
-          deftuple = PyTuple_Pack (2, pyaddr, pyifname);
-
-        Py_DECREF (pyaddr);
-        Py_DECREF (pyifname);
-        Py_DECREF (isdefault);
+        gateway = (Gateway *) calloc(1, sizeof (Gateway));
+        
+        gateway->is_default = is_default;
+        gateway->family = AF_INET;
+        
+        size_t gw_addr_len = strlen(buffer);
+        char* gw_addr = (char *) malloc (gw_addr_len * sizeof(char));
+        memcpy(gw_addr, buffer, gw_addr_len);
+        gateway->addr = gw_addr;
+        
+        size_t gw_ifname_len = strlen(ifname);
+        char* gw_ifname = (char *) malloc (gw_ifname_len * sizeof(char));
+        memcpy(gw_ifname, ifname, gw_ifname_len);
+        gateway->ifname = gw_ifname;
       }
-
-      if (tuple && !add_to_family (result, AF_INET, tuple)) {
-        Py_DECREF (deftuple);
-        Py_DECREF (result);
-        free (pmsg);
-        return NULL;
-      }
-
-      if (deftuple) {
-        PyObject *pyfamily = PyInt_FromLong (AF_INET);
-
-        PyDict_SetItem (defaults, pyfamily, deftuple);
-
-        Py_DECREF (pyfamily);
-        Py_DECREF (deftuple);
+        
+      if (gateway != NULL) {
+          add_to_gatways(results, gateway);
       }
     }
   }
@@ -1827,10 +1808,9 @@ find_system_gateways(Gateway** results)
     if (errno == ESRCH)
       skip = 1;
     else {
-      PyErr_SetFromErrno (PyExc_OSError);
       close (s);
       free (pmsg);
-      return NULL;
+      return ENETUNREACH;
     }
   }
 
@@ -1842,8 +1822,7 @@ find_system_gateways(Gateway** results)
     struct sockaddr_in6 *dst = NULL;
     struct sockaddr_in6 *gw = NULL;
     struct sockaddr_dl *ifp = NULL;
-    PyObject *tuple = NULL;
-    PyObject *deftuple = NULL;
+    Gateway* gateway = NULL;
 
     do {
       ret = recv (s, pmsg, bufsize, 0);
@@ -1851,10 +1830,9 @@ find_system_gateways(Gateway** results)
              || (ret > 0 && (pmsg->rtm_seq != seq || pmsg->rtm_pid != pid)));
 
     if (ret < 0) {
-      PyErr_SetFromErrno (PyExc_OSError);
       close (s);
       free (pmsg);
-      return NULL;
+      return ENETUNREACH;
     }
 
     if (pmsg->rtm_errno != 0) {
@@ -1862,10 +1840,10 @@ find_system_gateways(Gateway** results)
         skip = 1;
       else {
         errno = pmsg->rtm_errno;
-        PyErr_SetFromErrno (PyExc_OSError);
+        int err = pmsg->rtm_errno;
         close (s);
         free (pmsg);
-        return NULL;
+        return err;
       }
     }
 
@@ -1932,39 +1910,29 @@ find_system_gateways(Gateway** results)
 
       if (string_from_sockaddr ((struct sockaddr *)gw,
                                 buffer, sizeof(buffer)) == 0) {
-        PyObject *pyifname = PyString_FromString (ifname);
-        PyObject *pyaddr = PyString_FromString (buffer);
 #ifdef RTF_IFSCOPE
-        PyObject *isdefault = PyBool_FromLong (!(pmsg->rtm_flags & RTF_IFSCOPE));
+        bool is_default = !(pmsg->rtm_flags & RTF_IFSCOPE);
 #else
-        PyObject *isdefault = Py_True;
-	Py_INCREF (isdefault);
+        bool is_default = true;
 #endif
-
-        tuple = PyTuple_Pack (3, pyaddr, pyifname, isdefault);
-
-        if (PyObject_IsTrue (isdefault))
-          deftuple = PyTuple_Pack (2, pyaddr, pyifname);
-
-        Py_DECREF (pyaddr);
-        Py_DECREF (pyifname);
-        Py_DECREF (isdefault);
+        gateway = (Gateway *) calloc(1, sizeof (Gateway));
+        
+        gateway->is_default = is_default;
+        gateway->family = AF_INET6;
+        
+        size_t gw_addr_len = strlen(buffer);
+        char* gw_addr = (char *) malloc (gw_addr_len * sizeof(char));
+        memcpy(gw_addr, buffer, gw_addr_len);
+        gateway->addr = gw_addr;
+        
+        size_t gw_ifname_len = strlen(ifname);
+        char* gw_ifname = (char *) malloc (gw_ifname_len * sizeof(char));
+        memcpy(gw_ifname, ifname, gw_ifname_len);
+        gateway->ifname = gw_ifname;
       }
-
-      if (tuple && !add_to_family (result, AF_INET6, tuple)) {
-        Py_DECREF (deftuple);
-        Py_DECREF (result);
-        free (pmsg);
-        return NULL;
-      }
-
-      if (deftuple) {
-        PyObject *pyfamily = PyInt_FromLong (AF_INET6);
-
-        PyDict_SetItem (defaults, pyfamily, deftuple);
-
-        Py_DECREF (pyfamily);
-        Py_DECREF (deftuple);
+        
+      if (gateway != NULL) {
+          add_to_gatways(results, gateway);
       }
     }
   }
