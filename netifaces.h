@@ -13,6 +13,16 @@
 
 #include <stdbool.h>
 
+typedef struct Address {
+    struct Address*    next;
+    unsigned long      flags;
+    unsigned char      family;
+    char*              addr;
+    char*              netmask;
+    char*              broadcast;
+    char*              peer;
+} Address;
+
 typedef struct Gateway {
     struct Gateway*    next;
     unsigned char      family;

@@ -719,39 +719,96 @@ add_to_family (PyObject *result, int family, PyObject *obj)
   return TRUE;
 }
 
+#endif
+#if 1
+
+
 /* -- ifaddresses() --------------------------------------------------------- */
 
-static PyObject *
-ifaddrs (PyObject *self, PyObject *args)
+static bool
+add_to_addresses(Address** results, Address* address) {
+    Address* addr = *results;
+    if (address == NULL) {
+        return false;
+    }
+    if (*results == NULL) {
+        *results = address;
+        return true;
+    }
+    while(addr->next != NULL) {
+        // as we have the information already, we do not need to add it again.
+        if (addr == address || strcmp(addr->addr, address->addr) == 0) {
+            return true;
+        }
+
+        addr = addr->next;
+    }
+    addr->next = address;
+    return true;
+}
+
+void
+release_addresses(Address** results) {
+    Address *head = *results, *tail = NULL;
+    if (*results == NULL) {
+        return;
+    }
+    // traseverse linked list
+    while(head != NULL) {
+        tail = head;
+        head = head->next;
+        
+        if (tail->addr != NULL) {
+            free(tail->addr);
+        }
+        if (tail->netmask != NULL) {
+            free(tail->netmask);
+        }
+        if (tail->broadcast != NULL) {
+            free(tail->broadcast);
+        }
+        if (tail->peer != NULL) {
+            free(tail->peer);
+        }
+        tail->next = NULL;
+        free(tail);
+        tail = NULL;
+    }
+    *results = NULL;
+}
+
+/*!
+	@function ifaddrs
+	@discussion Returns ipv4/ipv6 addresses (dotted format) linked to the interface.
+	@param ifname The network interface name.
+            results List where address should go
+	@result The list of ipv4 addresses linked the interface;
+            NULL if no ipv4 addresses are supported or linked.
+ */
+
+static int
+ifaddrs (Address **results, const char *ifname)
 {
-  const char *ifname;
-  PyObject *result;
   int found = FALSE;
 #if HAVE_GETIFADDRS
   struct ifaddrs *addrs = NULL;
   struct ifaddrs *addr = NULL;
 #endif
-
-  if (!PyArg_ParseTuple (args, "s", &ifname))
-    return NULL;
-
-  result = PyDict_New ();
-
-  if (!result)
-    return NULL;
+  
+  if (ifname == NULL || strlen(ifname) == 0) {
+    return EINVAL;
+  }
 
 #if HAVE_GETIFADDRS
   /* .. UNIX, with getifaddrs() ............................................. */
 
   if (getifaddrs (&addrs) < 0) {
-    Py_DECREF (result);
-    PyErr_SetFromErrno (PyExc_OSError);
-    return NULL;
+    return ENETUNREACH;
   }
 
   for (addr = addrs; addr; addr = addr->ifa_next) {
     char buffer[256];
-    PyObject *pyaddr = NULL, *netmask = NULL, *braddr = NULL, *flags = NULL;
+    Address *address = NULL;
 
     if (strcmp (addr->ifa_name, ifname) != 0)
       continue;
@@ -767,6 +824,9 @@ ifaddrs (PyObject *self, PyObject *args)
     if (!addr->ifa_addr)
       continue;
       
+    /* As it is ready to pull address inforation, we'll alloc an address */
+    address = (Address *) calloc(1, sizeof (Address));
+    
 #if HAVE_IPV6_SOCKET_IOCTLS
     /* For IPv6 addresses we try to get the flags. */
     if (addr->ifa_addr->sa_family == AF_INET6) {
@@ -776,10 +836,9 @@ ifaddrs (PyObject *self, PyObject *args)
       int sock6 = socket (AF_INET6, SOCK_DGRAM, 0);
 
       if (sock6 < 0) {
-        Py_DECREF (result);
-        PyErr_SetFromErrno (PyExc_OSError);
         freeifaddrs (addrs);
-        return NULL;
+        free(address);
+        return ENETUNREACH;
       }
       
       sin = (struct sockaddr_in6 *)addr->ifa_addr;
@@ -787,72 +846,56 @@ ifaddrs (PyObject *self, PyObject *args)
       ifr6.ifr_addr = *sin;
       
       if (ioctl (sock6, SIOCGIFAFLAG_IN6, &ifr6) >= 0) {
-        flags = PyLong_FromUnsignedLong (ifr6.ifr_ifru.ifru_flags6);
+        address->flags = ifr6.ifr_ifru.ifru_flags6;
       }
 
       close (sock6);
     }
 #endif /* HAVE_IPV6_SOCKET_IOCTLS */
 
-    if (string_from_sockaddr (addr->ifa_addr, buffer, sizeof (buffer)) == 0)
-      pyaddr = PyString_FromString (buffer);
+    if (string_from_sockaddr (addr->ifa_addr, buffer, sizeof (buffer)) == 0) {
+      size_t addr_len = strlen(buffer);
+      char* addr_str = (char *) malloc (addr_len * sizeof(char));
+      memcpy(addr_str, buffer, addr_len);
+      address->addr = addr_str;
+    }
 
-    if (string_from_netmask (addr->ifa_netmask, buffer, sizeof (buffer)) == 0)
-      netmask = PyString_FromString (buffer);
-
-    if (string_from_sockaddr (addr->ifa_broadaddr, buffer, sizeof (buffer)) == 0)
-      braddr = PyString_FromString (buffer);
+    if (string_from_netmask (addr->ifa_netmask, buffer, sizeof (buffer)) == 0) {
+      size_t netmask_len = strlen(buffer);
+      char* netmask_str = (char *) malloc (netmask_len * sizeof(char));
+      memcpy(netmask_str, buffer, netmask_len);
+      address->netmask = netmask_str;
+    }
+      
+    if (string_from_sockaddr (addr->ifa_broadaddr, buffer, sizeof (buffer)) == 0) {
+      size_t braddr_len = strlen(buffer);
+      char* braddr_str = (char *) malloc (braddr_len * sizeof(char));
+      memcpy(braddr_str, buffer, braddr_len);
+      address->broadcast = braddr_str;
+    }
 
     /* Cygwin's implementation of getaddrinfo() is buggy and returns broadcast
        addresses for 169.254.0.0/16.  Nix them here. */
     if (addr->ifa_addr->sa_family == AF_INET) {
       struct sockaddr_in *sin = (struct sockaddr_in *)addr->ifa_addr;
-
       if ((ntohl(sin->sin_addr.s_addr) & 0xffff0000) == 0xa9fe0000) {
-        Py_XDECREF (braddr);
-        braddr = NULL;
+        if (address->broadcast != NULL && strlen(address->broadcast) != 0) {
+          free(address->broadcast);
+          address->broadcast = NULL;
+        }
       }
     }
 
-    {
-      PyObject *dict = PyDict_New();
-
-      if (!dict) {
-        Py_XDECREF (pyaddr);
-        Py_XDECREF (netmask);
-        Py_XDECREF (braddr);
-        Py_XDECREF (flags);
-        Py_DECREF (result);
-        freeifaddrs (addrs);
-        return NULL;
+    if (address->broadcast != NULL && strlen(address->broadcast) != 0) {
+      if (addr->ifa_flags & (IFF_POINTOPOINT | IFF_LOOPBACK)) {
+        address->peer = address->broadcast;
+        address->broadcast = NULL;
       }
-
-      if (pyaddr)
-        PyDict_SetItemString (dict, "addr", pyaddr);
-      if (netmask)
-        PyDict_SetItemString (dict, "netmask", netmask);
-
-      if (braddr) {
-        if (addr->ifa_flags & (IFF_POINTOPOINT | IFF_LOOPBACK))
-          PyDict_SetItemString (dict, "peer", braddr);
-        else
-          PyDict_SetItemString (dict, "broadcast", braddr);
-      }
+    }
       
-      if (flags)
-        PyDict_SetItemString (dict, "flags", flags);
-
-      Py_XDECREF (pyaddr);
-      Py_XDECREF (netmask);
-      Py_XDECREF (braddr);
-      Py_XDECREF (flags);
-
-      if (!add_to_family (result, addr->ifa_addr->sa_family, dict)) {
-        Py_DECREF (result);
-        freeifaddrs (addrs);
-        return NULL;
-      }
-    }
+    address->family = addr->ifa_addr->sa_family;
+    
+    add_to_addresses(results, address);
   }
 
   freeifaddrs (addrs);
@@ -862,16 +905,15 @@ ifaddrs (PyObject *self, PyObject *args)
   int sock = socket(AF_INET, SOCK_DGRAM, 0);
 
   if (sock < 0) {
-    Py_DECREF (result);
-    PyErr_SetFromErrno (PyExc_OSError);
-    return NULL;
+    return ENETUNREACH;
   }
 
   struct CNAME(ifreq) ifr;
-  PyObject *addr = NULL, *netmask = NULL, *braddr = NULL, *dstaddr = NULL;
   int is_p2p = FALSE;
   char buffer[256];
-
+  /* As it is ready to pull address inforation, we'll alloc an address */
+  Address *address = (Address *) calloc(1, sizeof (Address));
+    
   strncpy (ifr.CNAME(ifr_name), ifname, IFNAMSIZ);
 
 #if HAVE_SIOCGIFHWADDR
@@ -879,25 +921,14 @@ ifaddrs (PyObject *self, PyObject *args)
     found = TRUE;
 
     if (string_from_sockaddr ((struct sockaddr *)&ifr.CNAME(ifr_addr), buffer, sizeof (buffer)) == 0) {
-      PyObject *hwaddr = PyString_FromString (buffer);
-      PyObject *dict = PyDict_New ();
+      size_t addr_len = strlen(buffer);
+      char* addr_str = (char *) malloc (addr_len * sizeof(char));
+      memcpy(addr_str, buffer, addr_len);
+      address->addr = addr_str;
+        
+      address->family = AF_LINK;
 
-      if (!hwaddr || !dict) {
-        Py_XDECREF (hwaddr);
-        Py_XDECREF (dict);
-        Py_XDECREF (result);
-        close (sock);
-        return NULL;
-      }
-
-      PyDict_SetItemString (dict, "addr", hwaddr);
-      Py_DECREF (hwaddr);
-
-      if (!add_to_family (result, AF_LINK, dict)) {
-        Py_DECREF (result);
-        close (sock);
-        return NULL;
-      }
+      add_to_addresses(results, address);
     }
   }
 #endif
@@ -910,8 +941,12 @@ ifaddrs (PyObject *self, PyObject *args)
 #endif
     found = TRUE;
 
-    if (string_from_sockaddr ((struct sockaddr *)&ifr.CNAME(ifr_addr), buffer, sizeof (buffer)) == 0)
-      addr = PyString_FromString (buffer);
+    if (string_from_sockaddr ((struct sockaddr *)&ifr.CNAME(ifr_addr), buffer, sizeof (buffer)) == 0) {
+      size_t addr_len = strlen(buffer);
+      char* addr_str = (char *) malloc (addr_len * sizeof(char));
+      memcpy(addr_str, buffer, addr_len);
+      address->addr = addr_str;
+    }
   }
 #endif
 
@@ -923,8 +958,12 @@ ifaddrs (PyObject *self, PyObject *args)
 #endif
     found = TRUE;
 
-    if (string_from_sockaddr ((struct sockaddr *)&ifr.CNAME(ifr_addr), buffer, sizeof (buffer)) == 0)
-      netmask = PyString_FromString (buffer);
+    if (string_from_sockaddr ((struct sockaddr *)&ifr.CNAME(ifr_addr), buffer, sizeof (buffer)) == 0) {
+      size_t netmask_len = strlen(buffer);
+      char* netmask_str = (char *) malloc (netmask_len * sizeof(char));
+      memcpy(netmask_str, buffer, netmask_len);
+      address->netmask = netmask_str;
+    }
   }
 #endif
 
@@ -949,8 +988,12 @@ ifaddrs (PyObject *self, PyObject *args)
 #endif
     found = TRUE;
 
-    if (string_from_sockaddr ((struct sockaddr *)&ifr.CNAME(ifr_addr), buffer, sizeof (buffer)) == 0)
-      braddr = PyString_FromString (buffer);
+    if (string_from_sockaddr ((struct sockaddr *)&ifr.CNAME(ifr_addr), buffer, sizeof (buffer)) == 0) {
+      size_t braddr_len = strlen(buffer);
+      char* braddr_str = (char *) malloc (braddr_len * sizeof(char));
+      memcpy(braddr_str, buffer, braddr_len);
+      address->broadcast = braddr_str;
+    }
   }
 #endif
 
@@ -962,55 +1005,27 @@ ifaddrs (PyObject *self, PyObject *args)
 #endif
     found = TRUE;
 
-    if (string_from_sockaddr ((struct sockaddr *)&ifr.CNAME(ifr_addr), buffer, sizeof (buffer)) == 0)
-      dstaddr = PyString_FromString (buffer);
+    if (string_from_sockaddr ((struct sockaddr *)&ifr.CNAME(ifr_addr), buffer, sizeof (buffer)) == 0) {
+      size_t dstaddr_len = strlen(buffer);
+      char* dstaddr_str = (char *) malloc (dstaddr_len * sizeof(char));
+      memcpy(dstaddr_str, buffer, dstaddr_len);
+      address->peer = braddr_str;
+    }
   }
 #endif
 
-  {
-    PyObject *dict = PyDict_New();
+  address->family = AF_INET;
 
-    if (!dict) {
-      Py_XDECREF (addr);
-      Py_XDECREF (netmask);
-      Py_XDECREF (braddr);
-      Py_XDECREF (dstaddr);
-      Py_DECREF (result);
-      close (sock);
-      return NULL;
-    }
-
-    if (addr)
-      PyDict_SetItemString (dict, "addr", addr);
-    if (netmask)
-      PyDict_SetItemString (dict, "netmask", netmask);
-    if (braddr)
-      PyDict_SetItemString (dict, "broadcast", braddr);
-    if (dstaddr)
-      PyDict_SetItemString (dict, "peer", dstaddr);
-
-    Py_XDECREF (addr);
-    Py_XDECREF (netmask);
-    Py_XDECREF (braddr);
-    Py_XDECREF (dstaddr);
-
-    if (!add_to_family (result, AF_INET, dict)) {
-      Py_DECREF (result);
-      close (sock);
-      return NULL;
-    }
-  }
-
+  add_to_addresses(results, address);
+      
   close (sock);
 #endif /* HAVE_SOCKET_IOCTLS */
 
   if (found)
-    return result;
+    return 0;
   else {
-    Py_DECREF (result);
-    PyErr_SetString (PyExc_ValueError, 
-                     "You must specify a valid interface name.");
-    return NULL;
+    //You must specify a valid interface name
+    return EINVAL;
   }
 }
 

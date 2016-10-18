@@ -11,15 +11,15 @@ Portable network interface information - Golang port of Python [netifaces 0.10.5
 
 ### Task
 
-- [ ] inteface list
-- [ ] addresses
-- [ ] netmasks
-- [x] gateways : IP6 portion `AF_INET6` is unconverted as it will be needed later. It's much better to handle `Py_*` function exception when needed.
+- [x] ifaddresses : `HAVE_SOCKET_IOCTLS` section needs tests.
+- [ ] interfaces :
+- [x] gateways : IP6 portion `AF_INET6` should be tested thoroughly.
 
 ### Native Tests
 
 - OSX  
   run xcode
+
 - Linux 
 
   ```sh
@@ -33,7 +33,6 @@ Portable network interface information - Golang port of Python [netifaces 0.10.5
 ```sh
 go test ./...
 ```
-
 
 ### API
 
