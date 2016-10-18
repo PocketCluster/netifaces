@@ -63,6 +63,35 @@ int main(int argc, const char * argv[]) {
     }
     Gateway* default_gw = find_default_ip4_gw(&results);
     printf("default ip4 gw %s ifname %s\n", default_gw->addr, default_gw->ifname);
-    release_gateways(&results);
+    release_gateways_info(&results);
+    
+    
+    Interface *interfaces = NULL, *iface = NULL;
+    Address *address = NULL;
+    int err = find_system_interfaces(&interfaces);
+    if (err != 0) {
+        printf("error in interface info acquisition\n");
+    }
+    if (interfaces == NULL) {
+        printf("interfaces interface is null\n");
+        return 0;
+    }
+    
+    iface = interfaces;
+    while (iface != NULL) {
+        printf("iface name %s\n",iface->name);
+        
+        address = iface->address;
+        while (address != NULL) {
+            printf("\taddr %s\n", address->addr);
+            address = address->next;
+        }
+
+        iface = iface->next;
+    }
+    
+    release_interfaces_info(&interfaces);
+
+    return 0;
 }
 
