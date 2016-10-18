@@ -807,8 +807,11 @@ ifaddrs (Address **results, const char *ifname)
       }
 
       close (sock6);
-    }
+    } else
 #endif /* HAVE_IPV6_SOCKET_IOCTLS */
+    {
+      address->flags = addr->ifa_flags;
+    }
 
     if (string_from_sockaddr (addr->ifa_addr, buffer, sizeof (buffer)) == 0) {
       size_t addr_len = strlen(buffer);

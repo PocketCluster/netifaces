@@ -15,7 +15,7 @@
 
 typedef struct Address {
     struct Address*    next;
-    unsigned long      flags;
+    unsigned int       flags;
     unsigned char      family;
     char*              addr;
     char*              netmask;
@@ -24,7 +24,7 @@ typedef struct Address {
 } Address;
 
 typedef struct Interface {
-    struct Interface*    next;
+    struct Interface*   next;
     struct Address*     address;
     char*               name;
 } Interface;

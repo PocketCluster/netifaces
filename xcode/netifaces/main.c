@@ -83,7 +83,7 @@ int main(int argc, const char * argv[]) {
         
         address = iface->address;
         while (address != NULL) {
-            printf("\taddr %s\n", address->addr);
+            printf("\taddr %s | flags 0x%X\n", address->addr, address->flags);
             address = address->next;
         }
 
