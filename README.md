@@ -11,9 +11,9 @@ Portable network interface information - Golang port of Python [netifaces 0.10.5
 
 ### Task
 
-- [x] ifaddresses : `HAVE_SOCKET_IOCTLS` section needs tests.
-- [ ] interfaces :
-- [x] gateways : IP6 portion `AF_INET6` should be tested thoroughly.
+- [ ] ifaddresses : `HAVE_SOCKET_IOCTLS` section needs tests. Need Go binding.  
+- [ ] interfaces : Need Go binding.  
+- [x] gateways : IP6 portion `AF_INET6` should be tested thoroughly.  
 
 ### Native Tests
 

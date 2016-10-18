@@ -681,52 +681,10 @@ string_from_netmask (struct sockaddr *addr,
 }
 #endif /* !defined(WIN32) */
 
-#if 0
-static int
-add_to_family (PyObject *result, int family, PyObject *obj)
-{
-  PyObject *py_family;
-  PyObject *list;
-
-  if (!PyObject_Size (obj))
-    return TRUE;
-
-  py_family = PyInt_FromLong (family);
-  list = PyDict_GetItem (result, py_family);
-
-  if (!py_family) {
-    Py_DECREF (obj);
-    Py_XDECREF (list);
-    return FALSE;
-  }
-
-  if (!list) {
-    list = PyList_New (1);
-    if (!list) {
-      Py_DECREF (obj);
-      Py_DECREF (py_family);
-      return FALSE;
-    }
-
-    PyList_SET_ITEM (list, 0, obj);
-    PyDict_SetItem (result, py_family, list);
-    Py_DECREF (list);
-  } else {
-    PyList_Append (list, obj);
-    Py_DECREF (obj);
-  }
-
-  return TRUE;
-}
-
-#endif
-#if 1
-
-
 /* -- ifaddresses() --------------------------------------------------------- */
 
 static bool
-add_to_addresses(Address** results, Address* address) {
+append_address(Address** results, Address* address) {
     Address* addr = *results;
     if (address == NULL) {
         return false;
@@ -737,17 +695,16 @@ add_to_addresses(Address** results, Address* address) {
     }
     while(addr->next != NULL) {
         // as we have the information already, we do not need to add it again.
-        if (addr == address || strcmp(addr->addr, address->addr) == 0) {
+        if (addr == address || (addr->addr != NULL && address->addr != NULL && strcmp(addr->addr, address->addr) == 0) ) {
             return true;
         }
-
         addr = addr->next;
     }
     addr->next = address;
     return true;
 }
 
-void
+static void
 release_addresses(Address** results) {
     Address *head = *results, *tail = NULL;
     if (*results == NULL) {
@@ -895,7 +852,7 @@ ifaddrs (Address **results, const char *ifname)
       
     address->family = addr->ifa_addr->sa_family;
     
-    add_to_addresses(results, address);
+    append_address(results, address);
   }
 
   freeifaddrs (addrs);
@@ -928,7 +885,7 @@ ifaddrs (Address **results, const char *ifname)
         
       address->family = AF_LINK;
 
-      add_to_addresses(results, address);
+      append_address(results, address);
     }
   }
 #endif
@@ -1016,7 +973,7 @@ ifaddrs (Address **results, const char *ifname)
 
   address->family = AF_INET;
 
-  add_to_addresses(results, address);
+  append_address(results, address);
       
   close (sock);
 #endif /* HAVE_SOCKET_IOCTLS */
@@ -1031,11 +988,58 @@ ifaddrs (Address **results, const char *ifname)
 
 /* -- interfaces() ---------------------------------------------------------- */
 
-static PyObject *
-interfaces (PyObject *self)
-{
-  PyObject *result;
+      
+static bool
+append_interface(Interface** results, Interface* interface) {
+    Interface* iface = *results;
+    if (interface == NULL) {
+        return false;
+    }
+    if (*results == NULL) {
+        *results = interface;
+        return true;
+    }
+    while(iface->next != NULL) {
+        // as we have the information already, we do not need to add it again.
+        if (iface == interface || (iface->name != NULL &&  interface->name != NULL && strcmp(iface->name, interface->name)) == 0) {
+            return true;
+        }
 
+        iface = iface->next;
+    }
+    iface->next = interface;
+    return true;
+}
+
+static void
+release_interfaces(Interface** results) {
+    Interface *head = *results, *tail = NULL;
+    if (*results == NULL) {
+        return;
+    }
+    // traseverse linked list
+    while(head != NULL) {
+        tail = head;
+        head = head->next;
+        
+        if (tail->name != NULL) {
+            free(tail->name);
+        }
+
+        if (tail->address != NULL) {
+            release_addresses(&(tail->address));
+        }
+
+        tail->next = NULL;
+        free(tail);
+        tail = NULL;
+    }
+    *results = NULL;
+}
+      
+static int
+interfaces (Interface **results)
+{
 #if HAVE_GETIFADDRS
   /* .. UNIX, with getifaddrs() ............................................. */
 
@@ -1043,21 +1047,21 @@ interfaces (PyObject *self)
   struct ifaddrs *addrs = NULL;
   struct ifaddrs *addr = NULL;
 
-  result = PyList_New (0);
-
   if (getifaddrs (&addrs) < 0) {
-    Py_DECREF (result);
-    PyErr_SetFromErrno (PyExc_OSError);
-    return NULL;
+    return ENETUNREACH;
   }
 
   for (addr = addrs; addr; addr = addr->ifa_next) {
     if (!prev_name || strncmp (addr->ifa_name, prev_name, IFNAMSIZ) != 0) {
-      PyObject *ifname = PyString_FromString (addr->ifa_name);
+      
+      size_t ifname_len = strlen(addr->ifa_name);
+      char* ifname_str = (char *) malloc (ifname_len * sizeof(char));
+      memcpy(ifname_str, addr->ifa_name, ifname_len);
     
-      if (!PySequence_Contains (result, ifname))
-        PyList_Append (result, ifname);
-      Py_DECREF (ifname);
+      Interface *interface = (Interface *)calloc(1, sizeof (Interface));
+      interface->name = ifname_str;
+      append_interface(results, interface);
+        
       prev_name = addr->ifa_name;
     }
   }
@@ -1072,8 +1076,7 @@ interfaces (PyObject *self)
   int len = -1;
 
   if (fd < 0) {
-    PyErr_SetFromErrno (PyExc_OSError);
-    return NULL;
+    return ENOMEM;
   }
 
   // Try to find out how much space we need
@@ -1101,9 +1104,9 @@ interfaces (PyObject *self)
   ifc.CNAME(ifc_buf) = malloc (ifc.CNAME(ifc_len));
 
   if (!ifc.CNAME(ifc_buf)) {
-    PyErr_SetString (PyExc_MemoryError, "Not enough memory");
+    // Not enough memory
     close (fd);
-    return NULL;
+    return ENOMEM;
   }
 
 #if HAVE_SIOCGLIFNUM
@@ -1112,23 +1115,24 @@ interfaces (PyObject *self)
   if (ioctl (fd, SIOCGIFCONF, &ifc) < 0) {
 #endif
     free (ifc.CNAME(ifc_req));
-    PyErr_SetFromErrno (PyExc_OSError);
     close (fd);
-    return NULL;
+    return ENETUNREACH;
   }
 
-  result = PyList_New (0);
   struct CNAME(ifreq) *pfreq = ifc.CNAME(ifc_req);
   struct CNAME(ifreq) *pfreqend = (struct CNAME(ifreq) *)((char *)pfreq
                                                           + ifc.CNAME(ifc_len));
   while (pfreq < pfreqend) {
     if (!prev_name || strncmp (prev_name, pfreq->CNAME(ifr_name), IFNAMSIZ) != 0) {
-      PyObject *name = PyString_FromString (pfreq->CNAME(ifr_name));
 
-      if (!PySequence_Contains (result, name))
-        PyList_Append (result, name);
-      Py_XDECREF (name);
-
+      size_t ifname_len = strlen(pfreq->CNAME(ifr_name));
+      char* ifname_str = (char *) malloc (ifname_len * sizeof(char));
+      memcpy(ifname_str, pfreq->CNAME(ifr_name), ifname_len);
+      
+      Interface *interface = (Interface *)calloc(1, sizeof (Interface));
+      interface->name = ifname_str;
+      append_interface(results, interface);
+        
       prev_name = pfreq->CNAME(ifr_name);
     }
 
@@ -1150,15 +1154,42 @@ interfaces (PyObject *self)
   close (fd);
 #endif /* HAVE_SIOCGIFCONF */
 
-  return result;
+  return 0;
 }
+
+int
+find_system_interfaces(Interface **results) {
+    Interface *iface = NULL;
+    int err = interfaces(results);
+    if (err != 0) {
+        return err;
+    }
     
-#endif
+    iface = *results;
+    while(iface != NULL) {
+        err = ifaddrs(&(iface->address), iface->name);
+        if (err != 0) {
+            return err;
+        }
+        iface = iface->next;
+    }
+    return 0;
+}
+
+void
+release_interfaces_info(Interface **results) {
+    Interface *iface = *results;
+    while(iface != NULL) {
+        release_addresses(&(iface->address));
+        iface = iface->next;
+    }
+    release_interfaces(results);
+}
 
 /* -- gateways() ------------------------------------------------------------ */
 
 static bool
-add_to_gatways(Gateway** results, Gateway* gateway) {
+append_gatway(Gateway** results, Gateway* gateway) {
     Gateway* node = *results;
     if (gateway == NULL) {
         return false;
@@ -1175,7 +1206,7 @@ add_to_gatways(Gateway** results, Gateway* gateway) {
 }
     
 void
-release_gateways(Gateway** results) {
+release_gateways_info(Gateway** results) {
     Gateway *head = *results, *tail = NULL;
     if (*results == NULL) {
         return;
@@ -1447,7 +1478,7 @@ find_system_gateways(Gateway** results)
           memcpy(gw_ifname, ifname, gw_ifname_len);
           gateway->ifname = gw_ifname;
 
-          add_to_gatways(results, gateway);
+          append_gatway(results, gateway);
         }
 
       next:
@@ -1573,7 +1604,7 @@ find_system_gateways(Gateway** results)
         }
           
         if (gateway != NULL) {
-          add_to_gatways(results, gateway);
+          append_gatway(results, gateway);
         }
       }
 
@@ -1781,7 +1812,7 @@ find_system_gateways(Gateway** results)
       }
         
       if (gateway != NULL) {
-          add_to_gatways(results, gateway);
+          append_gatway(results, gateway);
       }
     }
   }
@@ -1947,7 +1978,7 @@ find_system_gateways(Gateway** results)
       }
         
       if (gateway != NULL) {
-          add_to_gatways(results, gateway);
+          append_gatway(results, gateway);
       }
     }
   }
