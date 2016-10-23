@@ -24,7 +24,7 @@ func FindSystemGateways() (*Gateway, error) {
 
 // Release all search results
 func (g *Gateway) Release() {
-    C.release_gateways(&g.gateway)
+    C.release_gateways_info(&g.gateway)
 }
 
 // Find the first ip4 default gateway
